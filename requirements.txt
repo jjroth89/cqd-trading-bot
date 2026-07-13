@@ -1,0 +1,14 @@
+# crypto-quant-desk — Python Dependencies
+# Install with: uv pip install -r requirements.txt
+# Or: pip install -r requirements.txt
+
+# Core dependencies
+ccxt>=4.0.0
+pandas>=2.0.0
+pandas-ta>=0.3.14b0
+numpy>=1.24.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Optional but recommended for performance
+urllib3>=2.0.0

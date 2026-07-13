@@ -1,0 +1,12 @@
+{
+  "sandbox_rules": {
+    "global_max_open_positions": 15,
+    "min_position_size_usdt": 50.00,
+    "max_position_size_usdt": 500.00,
+    "default_position_size_pct": 2.5,
+    "atr_stop_loss_multiplier": 1.5,
+    "atr_take_profit_multiplier": 3.0,
+    "trailing_stop_activation_multiplier": 2.0,
+    "trailing_stop_distance_multiplier": 0.5
+  }
+}

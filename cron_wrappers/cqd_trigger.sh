@@ -22,15 +22,15 @@
 set -euo pipefail
 
 # ── Dynamic Project Root ─────────────────────────────────────────────────────
-# This script is expected to be at PROJECT_ROOT/cron_wrappers/cqd_trigger.sh
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# Resolve symlink to get actual project location when run via /opt/data/scripts/
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_PATH")")"
 
 # ── Canonical Paths (relative to PROJECT_ROOT) ──────────────────────────────
 WATCHLIST_FILE="${PROJECT_ROOT}/config/watchlist.json"
 PYTHON_SCRIPT="${PROJECT_ROOT}/core/quant_evaluator.py"
 SANDBOX_SCRIPT="${PROJECT_ROOT}/core/sandbox_engine.py"
-PYTHON_BIN="${PROJECT_ROOT}/../cqd_venv/bin/python"
+PYTHON_BIN="/opt/data/cqd_venv/bin/python"
 EXCHANGE="${2:-binance}"
 
 # ── Load Environment Variables ───────────────────────────────────────────────
@@ -79,6 +79,11 @@ with open('${PAYLOAD}') as f:
 print(data.get('conviction_score', 0))
 ")
     
+    # ── Hard Environment Isolation ─────────────────────────────────────────
+    # Scrub any inherited global Hermes Telegram credentials before invoking
+    # Python to prevent CQD alerts from leaking to the global bot channel.
+    unset TG_BOT_TOKEN TG_CHAT_ID
+
     if [ "${CONVICTION}" -ge 7 ]; then
         echo "[CQD-TRIGGER] Conviction ${CONVICTION} >= 7 for ${PAIR}. Executing sandbox..."
         "${PYTHON_BIN}" "${SANDBOX_SCRIPT}" --execute "${PAYLOAD}"

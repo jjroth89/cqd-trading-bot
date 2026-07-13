@@ -31,6 +31,17 @@ PROJECT_ROOT = SCRIPT_DIR.parent  # /opt/data/cqd-trading-bot/
 # Both the evaluator and sandbox_engine write to the same file.
 LOG_FILE = PROJECT_ROOT / "logs" / "cqd_master_log.csv"
 
+# ─── FAIL-FAST SECURITY GUARDRAIL ─────────────────────────────────────────────
+# Halt immediately if the global Hermes Telegram credential leaks into this
+# process at import time.  Prevents the CQD bot from silently routing alerts
+# to the wrong (global Hermes) Telegram bot.
+if os.getenv("TG_BOT_TOKEN") is not None or os.getenv("TG_CHAT_ID") is not None:
+    raise RuntimeError(
+        "SECURITY VIOLATION: TG_BOT_TOKEN or TG_CHAT_ID detected at import time. "
+        "CQD bot requires strict isolation — only CQD_TG_BOT_TOKEN and CQD_TG_CHAT_ID "
+        "are permitted. Halted to prevent credential leakage."
+    )
+
 # CSV column order — must match the header line exactly
 FIELDNAMES = [
     "Timestamp",
@@ -76,7 +87,7 @@ def _ensure_header() -> None:
         writer.writeheader()
 
 
-def log_event(
+def _log_event(
     component: str = "SYSTEM",
     event_type: str = "INFO",
     pair: str = "SYSTEM",
@@ -116,10 +127,36 @@ def log_event(
             writer.writerow(row)
 
 
+def log_event(
+    component: str = "SYSTEM",
+    event_type: str = "INFO",
+    pair: str = "SYSTEM",
+    conviction: str = "",
+    fgi: str = "",
+    btc_dom: str = "",
+    pnl: str = "",
+    details: str = "",
+) -> None:
+    """
+    Public alias for _log_event.  Exists for callers that import this function
+    directly (e.g.  from cqd_logger import log_event).
+    """
+    _log_event(
+        component=component,
+        event_type=event_type,
+        pair=pair,
+        conviction=conviction,
+        fgi=fgi,
+        btc_dom=btc_dom,
+        pnl=pnl,
+        details=details,
+    )
+
+
 # ─── Convenience wrappers ────────────────────────────────────────────────────
 
 def log_scan(pair: str, conviction: str, fgi: str, btc_dom: str, details: str = "") -> None:
-    log_event(component="EVALUATOR", event_type="SCAN", pair=pair,
+    _log_event(component="EVALUATOR", event_type="SCAN", pair=pair,
               conviction=conviction, fgi=fgi, btc_dom=btc_dom, pnl="", details=details)
 
 
@@ -128,7 +165,7 @@ def log_execute(pair: str, conviction: str, entry_price: str,
     msg = f"entry={entry_price} size={size_usdt}USDT"
     if details:
         msg = f"{msg} | {details}"
-    log_event(component="SANDBOX", event_type="EXECUTE", pair=pair,
+    _log_event(component="SANDBOX", event_type="EXECUTE", pair=pair,
               conviction=conviction, pnl="", details=msg)
 
 
@@ -136,7 +173,7 @@ def log_exit(pair: str, pnl: str, close_reason: str, details: str = "") -> None:
     msg = f"reason={close_reason}"
     if details:
         msg = f"{msg} | {details}"
-    log_event(component="SANDBOX", event_type="EXIT", pair=pair,
+    _log_event(component="SANDBOX", event_type="EXIT", pair=pair,
               conviction="", pnl=pnl, details=msg)
 
 
@@ -147,13 +184,73 @@ def log_error(component: str, pair: str, exception: Exception, details: str = ""
     msg = f"{type(exception).__name__}: {exception}"
     if details:
         msg = f"{msg} | {details}"
-    log_event(component=component, event_type="ERROR", pair=pair,
+    _log_event(component=component, event_type="ERROR", pair=pair,
               conviction="", pnl="", details=msg)
 
 
 def log_tg_error(details: str = "") -> None:
-    log_event(component="TG", event_type="TG_ERROR", pair="SYSTEM",
+    _log_event(component="TG", event_type="TG_ERROR", pair="SYSTEM",
               conviction="", pnl="", details=details)
+
+
+class CqdLogger:
+    """
+    Idiomatic wrapper exposing logger methods as instance methods.
+
+    Usage::
+
+        from core.cqd_logger import cqd_logger
+        cqd_logger.log_scan("BTC/USDT", conviction=8, fgi=45, btc_dom=52.1)
+
+    All methods delegate to the internal _log_event function.
+    """
+
+    @staticmethod
+    def log_scan(pair: str, conviction: str, fgi: str, btc_dom: str,
+                details: str = "") -> None:
+        _log_event(component="EVALUATOR", event_type="SCAN", pair=pair,
+                   conviction=conviction, fgi=fgi, btc_dom=btc_dom,
+                   pnl="", details=details)
+
+    @staticmethod
+    def log_execute(pair: str, conviction: str, entry_price: str,
+                    size_usdt: str, details: str = "") -> None:
+        msg = f"entry={entry_price} size={size_usdt}USDT"
+        if details:
+            msg = f"{msg} | {details}"
+        _log_event(component="SANDBOX", event_type="EXECUTE", pair=pair,
+                   conviction=conviction, pnl="", details=msg)
+
+    @staticmethod
+    def log_exit(pair: str, pnl: str, close_reason: str,
+                details: str = "") -> None:
+        msg = f"reason={close_reason}"
+        if details:
+            msg = f"{msg} | {details}"
+        _log_event(component="SANDBOX", event_type="EXIT", pair=pair,
+                   conviction="", pnl=pnl, details=msg)
+
+    @staticmethod
+    def log_event(component: str, event_type: str, pair: str,
+                  conviction: str = "", fgi: str = "", btc_dom: str = "",
+                  pnl: str = "", details: str = "") -> None:
+        _log_event(component=component, event_type=event_type, pair=pair,
+                   conviction=conviction, fgi=fgi, btc_dom=btc_dom,
+                   pnl=pnl, details=details)
+
+    @staticmethod
+    def log_error(component: str, pair: str, exception: Exception,
+                  details: str = "") -> None:
+        log_error(component=component, pair=pair,
+                  exception=exception, details=details)
+
+    @staticmethod
+    def log_tg_error(details: str = "") -> None:
+        log_tg_error(details=details)
+
+
+# Module-level singleton instance
+cqd_logger = CqdLogger()
 
 
 if __name__ == "__main__":

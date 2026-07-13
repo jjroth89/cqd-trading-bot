@@ -57,11 +57,22 @@ for p in [PROJECT_ROOT / "state", PROJECT_ROOT / "logs", PROJECT_ROOT / "config"
 from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
 
+# ─── FAIL-FAST SECURITY GUARDRAIL ─────────────────────────────────────────────
+# Halt immediately if the global Hermes Telegram credential leaks into this
+# process at import time.  The CQD bot is strictly isolated — only its own
+# CQD_TG_BOT_TOKEN and CQD_TG_CHAT_ID tokens are permitted.
+if os.getenv("TG_BOT_TOKEN") is not None or os.getenv("TG_CHAT_ID") is not None:
+    raise RuntimeError(
+        "SECURITY VIOLATION: TG_BOT_TOKEN or TG_CHAT_ID detected at import time. "
+        "CQD bot requires strict isolation — only CQD_TG_BOT_TOKEN and CQD_TG_CHAT_ID "
+        "are permitted. Halted to prevent credential leakage."
+    )
+
 # ─── cqd_logger (graceful import — never blocks execution) ──────────────────
 LOGGER_AVAILABLE = False
 cqd_logger = None
 try:
-    from cqd_logger import cqd_logger
+    from core.cqd_logger import cqd_logger
     LOGGER_AVAILABLE = True
 except Exception:
     pass
@@ -184,7 +195,17 @@ def send_telegram_alert(message_text: str) -> None:
     unavailable — never raises, never blocks, zero LLM tokens consumed.
 
     Every successful send is appended to cqd/state/tg_sent_log.csv
+
+    SECURITY GUARDRAIL: Raises ValueError if TG_BOT_TOKEN is present in
+    environment to prevent credential leakage to CQD bot channel.
     """
+    # ── SANDBOX ISOLATION: Reject any global TG credentials ──────────────────
+    if os.getenv("TG_BOT_TOKEN") is not None:
+        raise RuntimeError(
+            "SECURITY VIOLATION: TG_BOT_TOKEN detected in environment. "
+            "CQD bot requires isolation. Use CQD_TG_BOT_TOKEN only."
+        )
+
     token, chat_id = _load_telegram_creds()
     if not token or not chat_id:
         return

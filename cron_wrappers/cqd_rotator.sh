@@ -14,13 +14,14 @@
 set -euo pipefail
 
 # ── Dynamic Project Root ─────────────────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# When run via symlink in /opt/data/scripts/, resolve to actual project location
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_PATH")")"
 
 # ── Canonical Paths ─────────────────────────────────────────────────────────
 ROTATOR_SCRIPT="${PROJECT_ROOT}/core/rotate_watchlist.py"
 WATCHLIST_JSON="${PROJECT_ROOT}/config/watchlist.json"
-PYTHON_BIN="${PROJECT_ROOT}/../cqd_venv/bin/python"
+PYTHON_BIN="/opt/data/cqd_venv/bin/python"
 
 # Load environment if .env exists
 if [ -f "${PROJECT_ROOT}/.env" ]; then

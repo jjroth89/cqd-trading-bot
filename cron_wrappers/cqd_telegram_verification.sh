@@ -13,7 +13,7 @@ set -euo pipefail
 # ── Dynamic Project Root ─────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-PYTHON_BIN="${PROJECT_ROOT}/../cqd_venv/bin/python"
+PYTHON_BIN="/opt/data/cqd_venv/bin/python"
 
 TG_SENT_LOG="${PROJECT_ROOT}/state/tg_sent_log.csv"
 MASTER_LOG="${PROJECT_ROOT}/logs/cqd_master_log.csv"

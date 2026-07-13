@@ -43,7 +43,7 @@ for d in (CONFIG_DIR, STATE_DIR, LOGS_DIR, DATA_DIR):
 
 # ─── cqd_logger (graceful import — never blocks execution) ───────────────────
 try:
-    from cqd_logger import cqd_logger
+    from core.cqd_logger import cqd_logger
     LOGGER_AVAILABLE = True
 except Exception:
     LOGGER_AVAILABLE = False

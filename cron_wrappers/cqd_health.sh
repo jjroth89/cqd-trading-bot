@@ -13,9 +13,10 @@
 set -euo pipefail
 
 # ── Dynamic Project Root ─────────────────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-PYTHON_BIN="${PROJECT_ROOT}/../cqd_venv/bin/python"
+# Resolve symlink to get actual project location when run via /opt/data/scripts/
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_PATH")")"
+PYTHON_BIN="/opt/data/cqd_venv/bin/python"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 json_bool() { [ "$1" -eq 0 ] && echo "true" || echo "false"; }

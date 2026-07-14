@@ -141,3 +141,24 @@ Issues & project board: `jjroth89/cqd-trading-bot`.
 ---
 
 *CQD is a sandbox research bot. Nothing here is financial advice, and no real funds are at risk by design.*
+
+---
+
+## Project Status — Prototype Completed, Focus Shifted
+
+CQD was built as a deliberate engineering exercise: stand up a fully deterministic, cron-driven quant pipeline from nothing, prove the operational discipline end-to-end (credential isolation, scheduler resilience, complete audit trail), and validate a technical-analysis signal engine against live market data — all without risking a cent.
+
+That objective is met. The engine runs, the pipeline is observable from ingest to alert, and the operational patterns extracted here have already been codified into reusable skills for the wider stack.
+
+As of July 2026, **active development on CQD is paused.** The author has moved on to higher-stakes, production-trading work where these exact lessons apply directly. CQD stays in the repo as a reference implementation and a clean sandbox for strategy experimentation.
+
+**What CQD proved out:**
+- A deterministic scoring engine (`core/quant_evaluator.py`) emitting consistent, fully explainable convictions every 15 minutes.
+- Bulletproof credential isolation between the bot's own Telegram channel and the global gateway — no cross-talk, ever.
+- Scheduler-resilience patterns (drift self-healing, symlink-containment workarounds) that survive model rotation and container restarts.
+
+**Deliberately left open (for the future or the curious):**
+- A backtesting harness to measure signal edge over historical data.
+- Live-exchange integration — gated behind backtest validation.
+
+The bot is currently **paused** (all crons disabled) but trivially resumable. The code is documented, committed, and ready to pick back up. See [`docs/LESSONS_LEARNED.md`](docs/LESSONS_LEARNED.md) for the full retrospective.

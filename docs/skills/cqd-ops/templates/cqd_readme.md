@@ -1,0 +1,126 @@
+# CQD — Crypto Quant Desk
+
+> **Version `0.x.0`** · *Sandbox validation phase. Deterministic engine, live signal pipeline, backtest harness in planning.*
+
+CQD is an automated crypto *quant desk*: a cron-driven pipeline that ingests market data, scores a rotating watchlist with a deterministic technical-analysis engine, and manages simulated positions against live prices. Execution is fully scripted (`no_agent` crons) — there is **no LLM in the decision path**. The sandbox layer is the deliberate first stage: validate signal quality and position lifecycle against real price action before any exchange integration.
+
+---
+
+## Pipeline
+
+```
+[BINANCE OHLCV + FNG/BTC-DOM]  ──▶  quant_evaluator  ──▶  conviction[1..10]
+                                            │                        │
+                                            ▼                        ▼
+                                  sandbox_engine.open()      monitor (5m poll)
+                                            │                        │
+                                            ▼                        ▼
+                                  wallet_state.json      SL/TP touch ──▶ close() ──▶ trade_history
+                                            │
+                                            ▼
+                                  cqd_logger ──▶ CQD Telegram bot (isolated creds)
+```
+
+1. **Ingest** — read-only Binance klines + numeric macro inputs: Crypto Fear & Greed Index (alternative.me) and BTC dominance (CoinGecko global).
+2. **Score** — per-symbol indicator stack → base conviction 5, clamped to `[1,10]`.
+3. **Act** — `score ≥ 7` opens a simulated position; size = `2.5% × balance`, clamped `[$50, $500]`.
+4. **Manage** — monitor polls every 5 min; closes on SL/TP *touch*, records P/L.
+5. **Alert** — entry/exit events pushed to CQD's own Telegram bot (credential-isolated).
+
+---
+
+## Scoring engine
+
+`core/quant_evaluator.py` — base conviction 5, adjusted by a weighted indicator vote:
+
+| Signal | Effect |
+|--------|--------|
+| RSI near oversold (<35) / overbought (>70) | ± |
+| MACD histogram sign + crossover | ± |
+| Bollinger Band touch (lower/upper) | ± |
+| EMA bullish/bearish alignment (ema20 >/< ema50) | ± |
+| Price vs ema50 | ± |
+| CVD (cumulative volume delta) sign | ± |
+| CMF / MFI overbought-oversold | ± |
+| Volatility expansion / squeeze-breakout setup | ± |
+
+- **Conviction 7–10** → long bias · **5–6** → neutral · **1–4** → short bias
+
+### Macro inputs
+`macro_cache.json` is refreshed each evaluator cycle: `fear_greed_index`, `fear_greed_label`, `btc_dominance`, `total_market_cap`. These feed the conviction nudge and are surfaced in the status report.
+
+---
+
+## Execution model
+
+`core/sandbox_engine.py`:
+
+- **SL%** = `1.5 × ATR / price`  ·  **TP%** = `3.0 × ATR / price`
+- Absolute levels: `sl_price = entry × (1 − sl_pct)`, `tp_price = entry × (1 + tp_pct)`
+- **Exit semantics:** close only on SL/TP *touch*. A position trading between its bands is held intentionally — correct risk-managed behavior, not a stalled trade.
+- Wallet starts at 10,000 USDT paper; realized P/L accumulates in `trade_history`.
+
+---
+
+## Schedule
+
+CQD is **cron-driven** (S6 + Hermes scheduler), not a long-lived daemon — by design.
+
+| Job | Interval | Responsibility |
+|-----|----------|----------------|
+| `cqd-monitor` | `*/5 * * * *` | Position lifecycle vs live price; SL/TP close. |
+| `cqd-trigger` | `*/15 * * * *` | Re-score watchlist; open sim position on score ≥ 7. |
+| `cqd-rotator` | `0 4 * * *` | Refresh the 5 rotating satellite pairs. |
+| `cqd-health` | hourly | JSON health report (venv, wallet, config, locks). |
+| `cqd-watchdog` | `*/10 * * * *` | Liveness probe + scheduler-drift self-heal. |
+
+**Watchdog rationale:** the scheduler disables an unpinned job after an active-model drift. The watchdog detects drift-blocked `cqd_*` jobs and re-pins them, so execution continuity never depends on which chat model is active.
+
+---
+
+## Credential isolation (4 layers)
+
+CQD runs its **own** Telegram bot, deliberately isolated from the global/Hermes bot:
+
+1. **Import-time guard** — `RuntimeError` if `TG_BOT_TOKEN`/`TG_CHAT_ID` present.
+2. **Send-time guard** — `send_telegram_alert` refuses to fire if global creds are in scope.
+3. **Wrapper scrub** — every cron wrapper runs `unset TG_BOT_TOKEN TG_CHAT_ID` before invoking Python.
+4. **Scoped reader** — sender reads **only** `CQD_TG_BOT_TOKEN` / `CQD_TG_CHAT_ID` from the local `.env`.
+
+Every successful send is logged to `state/tg_sent_log.csv`.
+
+---
+
+## Status
+
+**Engine:** fully deterministic, zero LLM dependencies, green across all execution crons. The signal pipeline produces consistent, explainable convictions every 15 minutes and manages open positions through their full SL/TP lifecycle correctly.
+
+**Validation path:** currently sandbox-first — no exchange keys, no live orders. This is the intentional pre-live stage: prove signal quality and position management on real price action before wiring capital. A backtesting harness is the next milestone on the roadmap.
+
+**Track record:** small but clean. Positions open and are managed to their risk levels; closed-trade bookkeeping is maturing alongside the backtest tooling.
+
+**Known gaps (planned):**
+- Trailing-stop params exist in `config.json` but only fixed SL/TP are implemented today.
+- Hard-coded to this operator's container (paths, venv, Binance source) — portability work is deferred until the strategy is validated.
+
+---
+
+## Layout
+
+```
+/opt/data/cqd-trading-bot/
+├── core/            # quant_evaluator, sandbox_engine, cqd_logger, cqd_watchdog, rotate_watchlist
+├── cron_wrappers/   # scheduler entrypoints (all unset global TG token)
+├── config/          # watchlist.json, config.json
+├── state/           # wallet_state.json, locks, tg_sent_log.csv, macro_cache.json
+├── logs/            # cqd_master_log.csv (master audit trail)
+└── scripts/         # model-free status-report data collector
+```
+
+## GitHub
+
+Issues & project board: `jjroth89/cqd-trading-bot`.
+
+---
+
+*CQD is a sandbox research bot. Nothing here is financial advice, and no real funds are at risk by design.*

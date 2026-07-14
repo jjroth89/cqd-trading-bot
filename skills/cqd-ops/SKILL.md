@@ -1,7 +1,7 @@
 ---
 name: cqd-ops
 description: "Operate and maintain the CQD trading bot: environment isolation (prevent global Hermes TG token leak), model-independent execution (AI-free math/data path), Telegram smoke tests, scheduler/cron traps, GitHub issue-board management for jjroth89/cqd-trading-bot, and remote backtest worker coordination."
-version: 2.0.0
+version: 2.2.0
 author: Hermes Agent
 license: MIT
 platforms: [linux]
@@ -58,9 +58,14 @@ so ANY execution-path coupling to a model name is guaranteed to silently break.
    Python via cron (`no_agent=true`, `script=...`). They NEVER call an LLM.
    Verified: `core/` + `scripts/` have zero AI/LLM imports (no openai, anthropic,
    langchain, litellm, hermes, gpt, claude, gemini).
-2. **AI is reserved for things scripts can't do well** — market sentiment
-   analysis, news fetching/summarization, qualitative research. NOT for
-   execution, math, or data retrieval.
+2. **No AI/LLM anywhere — "sentiment" is numeric, not a model.** All indicator
+   math, candle/OHLCV fetching (`ccxt`), wallet/SL/TP computation, and Telegram
+   alerts run in plain Python via cron (`no_agent=true`, `script=...`). The only
+   "market mood" input is the numeric **Fear & Greed Index** + **BTC dominance**
+   pulled from public REST APIs (alternative.me, CoinGecko) — there is NO language
+   model in the decision path at all. Verified: `core/` + `scripts/` have zero
+   AI/LLM imports (no openai, anthropic, langchain, litellm, hermes, gpt, claude,
+   gemini). The engine is 100% deterministic script code.
 3. **Cron jobs must NOT be pinned to a rotating chat model.** The Hermes
    scheduler blocks UNPINNED jobs after an active-model drift
    (`RuntimeError: Skipped to prevent unintended spend... job is unpinned`).
@@ -193,7 +198,74 @@ there only after they run successfully.
   Recipe + cron registration: `references/watchdog_recipe.md`.
 - Model-drift and symlink blocks are **scheduler traps**, not CQD bugs — see §2.3.
 
-## 7. References
+## 7. Document / Audit CQD (fact-sheet protocol)
+
+When asked to document, review, or produce an "audit" / "factsheet" / "what does
+this bot actually do" artifact for CQD, produce a **plain-English FACT SHEET**,
+not a polished README, unless the user explicitly wants the README. Protocol:
+
+1. **Read the actual code, don't infer from names.** The repo has no README, so
+   the source IS the spec. Read at minimum: `core/quant_evaluator.py`,
+   `core/sandbox_engine.py`, `core/cqd_logger.py`, `core/cqd_watchdog.py`,
+   `core/rotate_watchlist.py`, every `cron_wrappers/*.sh`, `config/*.json`,
+   `state/wallet_state.json`, `logs/cqd_master_log.csv`, `state/tg_sent_log.csv`,
+   and `state/macro_cache.json`.
+2. **Separate verified facts from gaps.** Every claim must trace to code you
+   read. Put anything you could NOT verify in a clearly-marked ⚠️ box or a
+   "Gaps I could not fully verify" list at the bottom — do not paper over
+   uncertainty. A fact sheet that hides unverified assumptions is worse than none.
+3. **Prove the "no live trading" claim with a probe**, never assert it. Run
+   `scripts/verify_sandbox_only.sh` (or the equivalent grep) to show there is no
+   `create_order` / `apiKey` / `secret` / `exchange.create_*` anywhere, and that
+   exchange use is read-only (`fetch_ticker` / `fetch_ohlcv`).
+4. **Capture the honest limitations** the user cares about (see checklist
+   below). Stakeholders repeatedly want to know: is it real-money? is it
+   backtested? is it portable? Be blunt.
+5. Include a **everyday glossary** (conviction, SL/TP, ATR, FGI, sandbox,
+   watchlist, satellite pairs, watchdog) — the audience is often non-technical.
+6. Use the starter scaffold at `templates/factsheet.md`; fill the sections, keep
+   the ⚠️ honesty boxes.
+
+### Honest-limitations checklist (verify each against current code before writing)
+- **Simulation-only:** no live exchange keys, no order placement. Confirm via the
+  sandbox-only probe. If the probe ever finds `create_order`/keys, STOP and flag
+  it — that would be a regression from the sandbox contract.
+- **Not backtested:** the strategy has NO historical validation. Issue #11 (open,
+  **P0/Critical**) is the plan to build the backtest/Optuna harness. State this
+  explicitly; "win rate" is unknown.
+- **Conviction gate lives in the wrapper, not the engine.** The "conviction >= 7 →
+  open" rule is enforced only in `cron_wrappers/cqd_trigger.sh`, NOT inside
+  `sandbox_engine.py` (which opens whatever payload it's handed). The master log
+  may therefore show EXECUTE rows at conviction < 7 (manual/test runs, or a prior
+  config). Don't claim ">=7 is enforced" without this caveat.
+- **Trailing stops advertised but NOT implemented.** `config.json` declares
+  `trailing_stop_activation_multiplier` / `trailing_stop_distance_multiplier`, but
+  only fixed ATR SL/TP exist in the engine. Flag as a gap when documenting config.
+- **Position state is NOT in a separate tracker.** There is no
+  `cqd_position_tracker.py` — open/closed positions live entirely in
+  `core/sandbox_engine.py` + `state/wallet_state.json`. Don't reference a missing
+  module.
+- **Tuned to one machine.** Paths (`/opt/data/cqd-trading-bot`,
+  `/opt/data/cqd_venv/bin/python`), cron schedules, the watchdog's hardcoded model
+  pin (`tencent/hy3:free` / `openrouter`), and Binance-only data are hard-wired.
+  Not portable; relocating needs path/config rework.
+- **Tiny track record.** Few sandbox executions; `trade_history` may be empty and
+  an `open_positions` entry may have no recorded close — bookkeeping around closed
+  trades can be incomplete. Don't over-claim a clean audit trail.
+
+### Reusable verification probes
+- `scripts/verify_sandbox_only.sh` — proves no live-order code / exchange keys.
+- Grep `core/*.py` for `cqd_position_tracker` to confirm the module is absent.
+- `wc -l state/tg_sent_log.csv` matched against EXECUTE/EXIT rows in the master
+  log = Telegram delivery reconciliation (same logic as `cqd_telegram_verification.sh`).
+
+## 8. References
 - `references/env-isolation.md` — token-leak guardrail proof + code.
 - `references/watchdog_recipe.md` — liveness canary build + cron registration.
 - `references/issue_11_spec.md` — remote backtest worker architecture.
+- `references/cqd_architecture.md` — verified trading-logic / code-flow + current
+  honest-limitations baseline (knowledge bank for audits/doc tasks).
+- `references/status_report.md` — model-free data collector + agent-rendered
+  daily status report (sandbox-honest, templated trading-dashboard layout).
+- `templates/factsheet.md` — starter fact-sheet scaffold for CQD doc tasks.
+- `scripts/verify_sandbox_only.sh` — probe proving CQD is simulation-only.

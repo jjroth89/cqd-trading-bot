@@ -13,6 +13,11 @@
 
 set -euo pipefail
 
+# ── Security: never inherit the global Hermes Telegram token ──────────────────
+# CQD uses its OWN bot (CQD_TG_BOT_TOKEN). If the global TG_BOT_TOKEN/TG_CHAT_ID
+# leaked in, alerts could route to the wrong bot. Strip them before any Python run.
+unset TG_BOT_TOKEN TG_CHAT_ID
+
 # ── Dynamic Project Root ─────────────────────────────────────────────────────
 # When run via symlink in /opt/data/scripts/, resolve to actual project location
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"

@@ -174,6 +174,42 @@ def save_wallet(wallet: dict) -> None:
         _atomic_write_wallet(wallet)
 
 
+def modify_wallet(updater) -> dict:
+    """
+    Atomic read-modify-write transaction on wallet state.
+
+    Args:
+        updater: A callable that receives the current wallet dict and returns
+                 a (modified_wallet, should_save) tuple. If should_save is False,
+                 no write occurs. This lets callers bail out early without a race.
+
+    Returns:
+        The final wallet dict (post-updater), whether or not it was saved.
+
+    Holds the exclusive lock for the ENTIRE read-modify-write cycle to prevent
+    lost updates when multiple threads/processes attempt concurrent modifications.
+    """
+    with wallet_lock(exclusive=True):
+        # Load current state
+        if os.path.exists(WALLET_FILE):
+            try:
+                with open(WALLET_FILE, "r") as f:
+                    wallet = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                wallet = {"balance_usdt": 10000.0, "open_positions": {}, "trade_history": []}
+        else:
+            wallet = {"balance_usdt": 10000.0, "open_positions": {}, "trade_history": []}
+
+        # Apply modifications
+        wallet, should_save = updater(wallet)
+
+        # Persist only if updater signalled a change
+        if should_save:
+            _atomic_write_wallet(wallet)
+
+        return wallet
+
+
 # ─── Telegram Notification ─────────────────────────────────────────────────────
 
 def _load_telegram_creds() -> tuple[str | None, str | None]:
@@ -359,11 +395,11 @@ def execute_trade(payload_path: str) -> None:
 
     entry_price = get_current_price(pair)
 
+    # Pre-compute SL/TP prices (needed post-transaction for logging/alerts)
     if sl_pct is None:
         sl_pct = 2.0
     if tp_pct is None:
         tp_pct = 5.0
-
     if direction == "long":
         sl_price = entry_price * (1 - (sl_pct / 100.0))
         tp_price = entry_price * (1 + (tp_pct / 100.0))
@@ -371,18 +407,15 @@ def execute_trade(payload_path: str) -> None:
         sl_price = entry_price * (1 + (sl_pct / 100.0))
         tp_price = entry_price * (1 - (tp_pct / 100.0))
 
-    wallet["open_positions"][pair] = {
-        "direction": direction,
-        "entry_price": entry_price,
-        "size_usdt": round(position_size_usdt, 2),
-        "sl_price": round(sl_price, 8),
-        "tp_price": round(tp_price, 8),
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-
-    wallet["balance_usdt"] -= position_size_usdt
-    # Save wallet with lock (atomic write)
-    save_wallet(wallet)
+    # ── Atomic wallet transaction ──────────────────────────────────────────────
+    # Hold the exclusive lock for the FULL read-modify-write cycle so that
+    # concurrent cron ticks cannot interleave and cause lost updates.
+    wallet = modify_wallet(
+        lambda w: _execute_trade_into_wallet(
+            w, cfg, pair, direction, entry_price, position_size_usdt,
+            risk_pct, sl_pct, tp_pct,
+        )
+    )
 
     if LOGGER_AVAILABLE and cqd_logger:
         conviction = str(data.get("trade_parameters", {}).get("max_risk_capital_pct", ""))
@@ -414,6 +447,62 @@ def execute_trade(payload_path: str) -> None:
             tp_pct=tp_pct,
         )
     )
+
+
+def _execute_trade_into_wallet(
+    wallet: dict,
+    cfg: dict,
+    pair: str,
+    direction: str,
+    entry_price: float,
+    position_size_usdt: float | None,
+    risk_pct: float | None,
+    sl_pct: float | None,
+    tp_pct: float | None,
+) -> tuple[dict, bool]:
+    """
+    Pure-function updater for execute_trade.
+    Returns (wallet, should_save). Does NOT raise — returns (wallet, False) on rejection.
+    """
+    max_pos = cfg.get("global_max_open_positions", 5)
+    if len(wallet.get("open_positions", {})) >= max_pos:
+        return wallet, False
+
+    if position_size_usdt is None:
+        if risk_pct is None:
+            risk_pct = 2.5
+        position_size_usdt = wallet["balance_usdt"] * (risk_pct / 100.0)
+
+    min_sz = cfg.get("min_position_size_usdt", 50.0)
+    max_sz = cfg.get("max_position_size_usdt", 500.0)
+    position_size_usdt = max(min_sz, min(max_sz, float(position_size_usdt)))
+
+    if pair in wallet["open_positions"]:
+        return wallet, False
+
+    # Compute SL/TP prices (same logic as execute_trade)
+    if sl_pct is None:
+        sl_pct = 2.0
+    if tp_pct is None:
+        tp_pct = 5.0
+    if direction == "long":
+        sl_price = entry_price * (1 - (sl_pct / 100.0))
+        tp_price = entry_price * (1 + (tp_pct / 100.0))
+    else:
+        sl_price = entry_price * (1 + (sl_pct / 100.0))
+        tp_price = entry_price * (1 - (tp_pct / 100.0))
+
+    wallet["open_positions"][pair] = {
+        "direction": direction,
+        "entry_price": entry_price,
+        "size_usdt": round(position_size_usdt, 2),
+        "sl_price": round(sl_price, 8),
+        "tp_price": round(tp_price, 8),
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+    wallet["balance_usdt"] -= position_size_usdt
+    return wallet, True
 
 
 # ─── Monitor ──────────────────────────────────────────────────────────────────
